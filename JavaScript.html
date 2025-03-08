@@ -1,0 +1,459 @@
+<script>
+  // Variabel global
+  let soalList = [];
+  let currentSoal = 0;
+  let biodata = {};
+  let jawaban = [];
+  let timerInterval;
+  let waktuMulai;
+  
+  // Inisialisasi aplikasi
+  document.addEventListener('DOMContentLoaded', function() {
+    // Memuat data soal
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (response.success) {
+          // Data soal berhasil dimuat
+          soalList = response.data;
+          jawaban = new Array(soalList.length).fill("");
+          
+          // Tampilkan halaman biodata
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('biodata-page').style.display = 'block';
+        } else {
+          // Terjadi error
+          showError("Error: " + response.message);
+        }
+      })
+      .withFailureHandler(function(error) {
+        showError("Terjadi kesalahan saat memuat soal: " + error);
+      })
+      .getSoalData();
+    
+    // Form biodata
+    document.getElementById('biodata-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      
+      const nama = document.getElementById('nama').value.trim();
+      const sekolah = document.getElementById('sekolah').value.trim();
+      const nomorHP = document.getElementById('nomorHP').value.trim();
+      
+      if (!nama || !sekolah || !nomorHP) {
+        alert('Semua data harus diisi!');
+        return;
+      }
+      
+      // Tampilkan loading
+      document.getElementById('biodata-page').style.display = 'none';
+      document.getElementById('loading').style.display = 'block';
+      
+      // Simpan biodata ke Google Sheet
+      google.script.run
+        .withSuccessHandler(function(response) {
+          if (response.success) {
+            // Biodata berhasil disimpan
+            biodata = response.data;
+            
+            // Tampilkan halaman soal
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('soal-page').style.display = 'block';
+            
+            // Tampilkan informasi peserta
+            document.getElementById('peserta-info').textContent = biodata.nama + ' - ' + biodata.sekolah;
+            
+            // Buat navigasi nomor soal
+            createNomorSoal();
+            
+            // Tampilkan soal pertama
+            showSoal(0);
+            
+            // Mulai timer
+            startTimer();
+          } else {
+            // Terjadi error
+            showError("Error saat menyimpan biodata: " + response.message);
+            document.getElementById('biodata-page').style.display = 'block';
+            document.getElementById('loading').style.display = 'none';
+          }
+        })
+        .withFailureHandler(function(error) {
+          showError("Terjadi kesalahan saat menyimpan biodata: " + error);
+          document.getElementById('biodata-page').style.display = 'block';
+          document.getElementById('loading').style.display = 'none';
+        })
+        .simpanBiodata({
+          nama: nama,
+          sekolah: sekolah,
+          nomorHP: nomorHP
+        });
+    });
+    
+    // Tombol navigasi soal
+    document.getElementById('prev-btn').addEventListener('click', function() {
+      if (currentSoal > 0) {
+        showSoal(currentSoal - 1);
+      }
+    });
+    
+    document.getElementById('next-btn').addEventListener('click', function() {
+      if (currentSoal < soalList.length - 1) {
+        showSoal(currentSoal + 1);
+      }
+    });
+    
+    // Tombol selesai ujian
+    document.getElementById('finish-btn').addEventListener('click', function() {
+      // Periksa soal yang belum dijawab
+      const belumDijawab = jawaban.filter(j => j === "").length;
+      
+      if (belumDijawab > 0) {
+        const confirm = window.confirm(`Masih ada ${belumDijawab} soal yang belum dijawab. Yakin ingin menyelesaikan ujian?`);
+        if (!confirm) return;
+      } else {
+        const confirm = window.confirm('Yakin ingin menyelesaikan ujian?');
+        if (!confirm) return;
+      }
+      
+      // Tampilkan loading
+      document.getElementById('soal-page').style.display = 'none';
+      document.getElementById('loading').style.display = 'block';
+      
+      // Hentikan timer
+      clearInterval(timerInterval);
+      
+      // Simpan hasil ke Google Sheet
+      google.script.run
+        .withSuccessHandler(function(response) {
+          if (response.success) {
+            // Hasil berhasil disimpan
+            const hasil = response.data.hasil;
+            
+            // Tampilkan halaman hasil
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('hasil-page').style.display = 'block';
+            
+            // Tampilkan biodata
+            document.getElementById('biodata-hasil').innerHTML = `
+              <div class="card mb-3">
+                <div class="card-body">
+                  <h4>Biodata Peserta</h4>
+                  <table class="table table-borderless">
+                    <tr>
+                      <td width="150">Nama</td>
+                      <td>: ${biodata.nama}</td>
+                    </tr>
+                    <tr>
+                      <td>Asal Sekolah</td>
+                      <td>: ${biodata.sekolah}</td>
+                    </tr>
+                    <tr>
+                      <td>Nomor HP</td>
+                      <td>: ${biodata.nomorHP}</td>
+                    </tr>
+                  </table>
+                </div>
+              </div>
+            `;
+            
+            // Tampilkan skor
+            document.getElementById('skor-hasil').innerHTML = `
+              <div class="card mb-3">
+                <div class="card-body">
+                  <h4>Skor Anda</h4>
+                  <div class="display-4">${hasil.skor}</div>
+                  <p>Jawaban Benar: ${hasil.benar} dari ${hasil.total} soal</p>
+                </div>
+              </div>
+            `;
+            
+            // Tampilkan detail hasil
+            let detailHTML = '<h4>Detail Jawaban</h4>';
+            
+            hasil.hasilDetail.forEach(function(item) {
+              const statusClass = item.isBenar ? 'hasil-benar' : 'hasil-salah';
+              const statusText = item.isBenar ? 'Benar' : 'Salah';
+              
+              detailHTML += `
+                <div class="hasil-item">
+                  <div class="d-flex justify-content-between">
+                    <h5>Soal ${item.nomor}</h5>
+                    <span class="${statusClass}"><strong>${statusText}</strong></span>
+                  </div>
+                  ${item.gambar ? `<div class="soal-gambar"><img src="${item.gambar}" alt="Gambar soal"></div>` : ''}
+                  ${item.tabel ? `<div class="soal-tabel">${item.tabel}</div>` : ''}
+                  ${item.paragraf ? `<div class="soal-paragraf">${item.paragraf}</div>` : ''}
+                  <div class="soal-content">${item.pertanyaan}</div>
+                  <div class="mt-2">
+                    <p><strong>Jawaban Anda:</strong> ${getJawabanText(item.jawabanSiswa, item)}</p>
+                    <p><strong>Jawaban Benar:</strong> ${getJawabanText(item.jawabanBenar, item)}</p>
+                  </div>
+                </div>
+              `;
+            });
+            
+            document.getElementById('detail-hasil').innerHTML = detailHTML;
+            
+            // Siapkan konten untuk dicetak
+            createPrintContent(hasil);
+          } else {
+            // Terjadi error
+            showError("Error saat menyimpan hasil: " + response.message);
+            document.getElementById('soal-page').style.display = 'block';
+            document.getElementById('loading').style.display = 'none';
+          }
+        })
+        .withFailureHandler(function(error) {
+          showError("Terjadi kesalahan saat menyimpan hasil: " + error);
+          document.getElementById('soal-page').style.display = 'block';
+          document.getElementById('loading').style.display = 'none';
+        })
+        .simpanHasil({
+          biodata: biodata,
+          jawaban: jawaban,
+          soalList: soalList
+        });
+    });
+    
+    // Tombol cetak hasil
+    document.getElementById('print-btn').addEventListener('click', function() {
+      window.print();
+    });
+    
+    // Tombol kembali ke awal
+    document.getElementById('restart-btn').addEventListener('click', function() {
+      // Reset data
+      currentSoal = 0;
+      jawaban = new Array(soalList.length).fill("");
+      
+      // Kembali ke halaman biodata
+      document.getElementById('hasil-page').style.display = 'none';
+      document.getElementById('biodata-page').style.display = 'block';
+      
+      // Reset form
+      document.getElementById('biodata-form').reset();
+    });
+  });
+  
+  // Menampilkan pesan error
+  function showError(message) {
+    const errorElement = document.getElementById('error-message');
+    errorElement.textContent = message;
+    errorElement.style.display = 'block';
+    document.getElementById('loading').querySelector('.spinner-border').style.display = 'none';
+  }
+  
+  // Menampilkan soal
+  function showSoal(index) {
+    if (index < 0 || index >= soalList.length) return;
+    
+    currentSoal = index;
+    const soal = soalList[index];
+    let soalHTML = '';
+    
+    // Tampilkan gambar jika ada
+    if (soal.gambar) {
+      soalHTML += `<div class="soal-gambar"><img src="${soal.gambar}" alt="Gambar soal"></div>`;
+    }
+    
+    // Tampilkan tabel jika ada
+    if (soal.tabel) {
+      soalHTML += `<div class="soal-tabel">${soal.tabel}</div>`;
+    }
+    
+    // Tampilkan paragraf jika ada
+    if (soal.paragraf) {
+      soalHTML += `<div class="soal-paragraf">${soal.paragraf}</div>`;
+    }
+    
+    // Tampilkan pertanyaan
+    soalHTML += `
+      <div class="soal-content">
+        <h5>Soal ${soal.nomor}</h5>
+        <div>${soal.pertanyaan}</div>
+      </div>
+    `;
+    
+    // Tampilkan pilihan jawaban
+    soalHTML += '<div class="pilihan-container">';
+    
+    const pilihan = [
+      { key: '1', text: soal.pilihanA, label: 'A' },
+      { key: '2', text: soal.pilihanB, label: 'B' },
+      { key: '3', text: soal.pilihanC, label: 'C' },
+      { key: '4', text: soal.pilihanD, label: 'D' },
+      { key: '5', text: soal.pilihanE, label: 'E' }
+    ];
+    
+    pilihan.forEach(function(p) {
+      const isSelected = jawaban[index] === p.key;
+      soalHTML += `
+        <div class="pilihan-item ${isSelected ? 'pilihan-selected' : ''}" data-value="${p.key}" onclick="pilihJawaban(this, ${index})">
+          <strong>${p.label}.</strong> ${p.text}
+        </div>
+      `;
+    });
+    
+    soalHTML += '</div>';
+    
+    document.getElementById('soal-container').innerHTML = soalHTML;
+    
+    // Update tombol navigasi
+    document.getElementById('prev-btn').disabled = index === 0;
+    document.getElementById('next-btn').disabled = index === soalList.length - 1;
+    
+    // Render LaTeX jika ada
+    if (window.MathJax) {
+      MathJax.typesetPromise && MathJax.typesetPromise();
+    }
+    
+    // Update highlight nomor soal
+    updateNomorSoal();
+  }
+  
+  // Memilih jawaban
+  function pilihJawaban(element, index) {
+    const value = element.getAttribute('data-value');
+    jawaban[index] = value;
+    
+    // Update tampilan pilihan
+    const pilihanItems = document.querySelectorAll('.pilihan-item');
+    pilihanItems.forEach(function(item) {
+      item.classList.remove('pilihan-selected');
+    });
+    element.classList.add('pilihan-selected');
+    
+    // Update navigasi nomor soal
+    updateNomorSoal();
+  }
+  
+  // Membuat navigasi nomor soal
+  function createNomorSoal() {
+    const container = document.getElementById('nomor-soal-container');
+    container.innerHTML = '';
+    
+    for (let i = 0; i < soalList.length; i++) {
+      const button = document.createElement('button');
+      button.className = 'nomor-soal-btn ' + (jawaban[i] ? 'nomor-sudah' : 'nomor-belum');
+      button.textContent = i + 1;
+      button.onclick = function() {
+        showSoal(i);
+      };
+      
+      container.appendChild(button);
+    }
+  }
+  
+  // Update tampilan navigasi nomor soal
+  function updateNomorSoal() {
+    const buttons = document.querySelectorAll('.nomor-soal-btn');
+    
+    for (let i = 0; i < buttons.length; i++) {
+      buttons[i].className = 'nomor-soal-btn ' + (jawaban[i] ? 'nomor-sudah' : 'nomor-belum');
+    }
+  }
+  
+  // Mendapatkan teks jawaban (A, B, C, D, atau E)
+  function getJawabanText(key, soal) {
+    if (!key) return '-';
+    
+    const mapping = {
+      '1': `A. ${soal.pilihanA}`,
+      '2': `B. ${soal.pilihanB}`,
+      '3': `C. ${soal.pilihanC}`,
+      '4': `D. ${soal.pilihanD}`,
+      '5': `E. ${soal.pilihanE}`
+    };
+    
+    return mapping[key] || '-';
+  }
+  
+  // Timer ujian
+  function startTimer() {
+    waktuMulai = new Date();
+    const timerElement = document.getElementById('timer');
+    
+    timerInterval = setInterval(function() {
+      const now = new Date();
+      const diff = now - waktuMulai;
+      
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+      
+      timerElement.textContent = `${padZero(hours)}:${padZero(minutes)}:${padZero(seconds)}`;
+    }, 1000);
+  }
+  
+  // Pad angka dengan nol di depan jika kurang dari 10
+  function padZero(num) {
+    return num < 10 ? '0' + num : num;
+  }
+  
+ // Membuat konten untuk dicetak
+function createPrintContent(hasil) {
+  let printHTML = `
+    <div class="print-header">
+      <h2 class="text-center">Hasil Ujian CBT Online</h2>
+      <div class="row mt-4">
+        <div class="col-6">
+          <h4>Biodata Peserta</h4>
+          <table class="table table-borderless">
+            <tr>
+              <td width="150">Nama</td>
+              <td>: ${biodata.nama}</td>
+            </tr>
+            <tr>
+              <td>Asal Sekolah</td>
+              <td>: ${biodata.sekolah}</td>
+            </tr>
+            <tr>
+              <td>Nomor HP</td>
+              <td>: ${biodata.nomorHP}</td>
+            </tr>
+          </table>
+        </div>
+        <div class="col-6 text-right">
+          <h4>Hasil Ujian</h4>
+          <p>Skor: ${hasil.skor}</p>
+          <p>Benar: ${hasil.benar} dari ${hasil.total} soal</p>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // Buat halaman detail untuk masing-masing soal
+  hasil.hasilDetail.forEach(function(item, index) {
+    const statusClass = item.isBenar ? 'hasil-benar' : 'hasil-salah';
+    const statusText = item.isBenar ? 'Benar' : 'Salah';
+    
+    printHTML += `
+      <div class="page-break">
+        <div class="hasil-item">
+          <div class="d-flex justify-content-between">
+            <h5>Soal ${item.nomor}</h5>
+            <span class="${statusClass}"><strong>${statusText}</strong></span>
+          </div>
+          ${item.gambar ? `<div class="soal-gambar"><img src="${item.gambar}" alt="Gambar soal"></div>` : ''}
+          ${item.tabel ? `<div class="soal-tabel">${item.tabel}</div>` : ''}
+          ${item.paragraf ? `<div class="soal-paragraf">${item.paragraf}</div>` : ''}
+          <div class="soal-content">${item.pertanyaan}</div>
+          <div class="mt-2">
+            <p><strong>Jawaban Anda:</strong> ${getJawabanText(item.jawabanSiswa, item)}</p>
+            <p><strong>Jawaban Benar:</strong> ${getJawabanText(item.jawabanBenar, item)}</p>
+          </div>
+        </div>
+      </div>
+    `;
+  });
+  
+  // Masukkan hasil ke elemen print-content
+  document.getElementById('print-content').innerHTML = printHTML;
+  
+  // Render LaTeX pada konten cetak
+  if (window.MathJax) {
+    setTimeout(function() {
+      MathJax.typesetPromise && MathJax.typesetPromise([document.getElementById('print-content')]);
+    }, 100);
+  }
+}
+</script>
