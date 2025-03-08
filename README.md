@@ -153,10 +153,10 @@ Aplikasi ini dapat dikembangkan dengan menambah fitur seperti:
 
 Proyek ini dilisensikan di bawah [MIT License](LICENSE).
 
-## Kontributor
+## Kontributor (Beta Tester)
 
-- [Nama Anda]
-- [Nama Kontributor Lain (jika ada)]
+- vinsen
+- yohana
 
 ## Kontak
 
